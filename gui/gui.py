@@ -5,8 +5,10 @@ import pandas as pd
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
+from datetime import datetime, UTC
 
 # Ensure project root is importable when running via `streamlit run gui/gui.py`.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,16 +16,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.config_loader import get_config
-from db.writer import update_post_review_status
+from scheduler.runner import run_daily_pipeline
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Snapgo Reddit Marketing Operator Dashboard",
+    page_title="Snapgo Reddit Marketing Intelligence Dashboard",
     page_icon="🚗",
     layout="wide"
 )
 
-# Custom CSS for rich aesthetics and glassmorphism styling
+# Custom CSS for rich aesthetics, glassmorphism, and metric cards
 st.markdown("""
 <style>
     .reportview-container {
@@ -33,8 +35,22 @@ st.markdown("""
         background: rgba(30, 41, 59, 0.7);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 12px;
-        padding: 15px;
+        padding: 12px;
         text-align: center;
+        margin-bottom: 15px;
+        min-height: 100px;
+    }
+    .metric-card h4 {
+        margin: 0;
+        font-size: 13px;
+        color: #94a3b8;
+        font-weight: 500;
+    }
+    .metric-card h2 {
+        margin: 5px 0 0 0;
+        font-size: 24px;
+        color: #3b82f6;
+        font-weight: bold;
     }
     .stButton>button {
         border-radius: 8px;
@@ -46,6 +62,27 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+def get_last_scrape_time() -> float:
+    """Read the last scrape timestamp from file."""
+    path = os.path.join(PROJECT_ROOT, "data", "last_scrape.txt")
+    if not os.path.exists(path):
+        return 0.0
+    try:
+        with open(path, "r") as f:
+            return float(f.read().strip())
+    except Exception:
+        return 0.0
+
+def set_last_scrape_time(t: float):
+    """Write the last scrape timestamp to file."""
+    path = os.path.join(PROJECT_ROOT, "data", "last_scrape.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "w") as f:
+            f.write(str(t))
+    except Exception:
+        pass
 
 def _extract_json_from_text(text: str) -> str:
     """Extract JSON payload from markdown-fenced or plain text."""
@@ -84,7 +121,7 @@ def load_posts_with_insights(
     SELECT id, url, title, body, relevance_score, pain_score, emotion_score,
            COALESCE(technical_depth_score, 0) as technical_depth_score,
            subreddit, created_utc, processed_at,
-           user_intent, marketing_campaign, suggested_response, review_status,
+           user_intent, marketing_campaign, suggested_response,
            country, state, city, origin, destination, priority_level, overall_priority_score,
            intent_strength, pain_severity
     FROM posts
@@ -133,7 +170,6 @@ def load_posts_with_insights(
     posts_df['user_intent'] = posts_df['user_intent'].fillna('')
     posts_df['marketing_campaign'] = posts_df['marketing_campaign'].fillna('')
     posts_df['suggested_response'] = posts_df['suggested_response'].fillna('')
-    posts_df['review_status'] = posts_df['review_status'].fillna('pending')
     
     posts_df['country'] = posts_df['country'].fillna('')
     posts_df['state'] = posts_df['state'].fillna('')
@@ -175,7 +211,7 @@ def display_post_card(post: pd.Series):
         st.markdown("---")
         
         # Grid layout for core metrics and status indicators
-        col1, col2, col3, col4, col5 = st.columns([1.5, 1, 1, 1.5, 8])
+        col1, col2, col3, col4 = st.columns([1.5, 1, 1, 8])
 
         with col1:
             st.metric("Priority Score", f"{post['overall_priority_score']:.1f}")
@@ -184,20 +220,6 @@ def display_post_card(post: pd.Series):
         with col3:
             st.metric("Frustration", f"{post['emotion_score']:.1f}")
         with col4:
-            # Color-coded status badge
-            status = post['review_status'].upper()
-            if status == "APPROVED":
-                badge_style = "background-color: #2e7d32; color: white;"
-            elif status == "REJECTED":
-                badge_style = "background-color: #c62828; color: white;"
-            else:
-                badge_style = "background-color: #f57c00; color: white;"
-            
-            st.markdown(
-                f"<div style='text-align: center; font-size: 11px; font-weight: bold; border-radius: 6px; padding: 4px; margin-top: 10px; {badge_style}'>{status}</div>",
-                unsafe_allow_html=True
-            )
-        with col5:
             # Priority Level Badge Color mapping
             lvl = post['priority_level']
             if lvl == "Highest":
@@ -233,39 +255,15 @@ def display_post_card(post: pd.Series):
             
     with col_meta:
         # Show tag pills
-        tags_list = [tag.strip() for tag in post['tags'].split(',') if tag.strip()]
+        tags_str = post.get('tags', '')
+        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()] if isinstance(tags_str, str) else []
         tags_html = "".join(map(lambda tag: f"<span style='background-color: #3b82f6; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px; margin-right: 4px; display: inline-block;'>{tag}</span>", tags_list))
         st.markdown(tags_html, unsafe_allow_html=True)
 
-    # Contextual suggested reply
+    # Contextual suggested reply (Native copyable code block)
     st.markdown("**💬 Suggested Reply Draft** *(Click inside code block to copy)*")
-    response_key = f"response_{post['id']}"
-    
-    # Editable box for human-in-the-loop review
-    edited_text = st.text_area(
-        label="Edit Reply Draft",
-        value=post['suggested_response'],
-        key=response_key,
-        height=110,
-        label_visibility="collapsed"
-    )
-    
-    # Streamlit Code blocks support single-click copy to clipboard natively
-    st.code(edited_text, language="text")
-
-    # Review status controls
-    btn_col1, btn_col2, btn_col3 = st.columns([1.5, 1.5, 9])
-    with btn_col1:
-        if st.button("👍 Approve", key=f"app_{post['id']}"):
-            update_post_review_status(post['id'], 'approved', edited_text)
-            st.success("Status: Approved!")
-            st.rerun()
-            
-    with btn_col2:
-        if st.button("👎 Reject", key=f"rej_{post['id']}"):
-            update_post_review_status(post['id'], 'rejected', edited_text)
-            st.warning("Status: Rejected")
-            st.rerun()
+    suggested_reply = post['suggested_response'].strip() if post['suggested_response'] else "AI response unavailable."
+    st.code(suggested_reply, language="text")
 
     # Original discussion text expander
     with st.expander("🔍 Show Original Thread Context"):
@@ -277,19 +275,64 @@ def display_post_card(post: pd.Series):
             st.write(body_text)
 
 
+def run_scrape_workflow_with_progress():
+    """Executes the scraper workflow step-by-step showing status in real-time."""
+    status_placeholder = st.empty()
+    with status_placeholder.container():
+        st.markdown("### 🔄 Refreshing Reddit Feed")
+        
+        # Step 1 & 2: Search & Extract (Playwright Scraper)
+        st.info("Searching Reddit...")
+        time.sleep(0.5)
+        st.info("Extracting Posts...")
+        from reddit.scraper import scrape_subreddits
+        scraped_posts = scrape_subreddits()
+        
+        # Step 3: Filtering
+        st.info("Filtering...")
+        from scheduler.runner import is_valid_post, run_local_fallback_pipeline, is_ai_configured
+        scraped_posts = [p for p in scraped_posts if is_valid_post(p)]
+        
+        # Step 4: Generating AI Insights (Only for newly scraped/changed posts)
+        st.info("Generating AI Insights...")
+        if scraped_posts:
+            if not is_ai_configured():
+                run_local_fallback_pipeline(scraped_posts)
+            else:
+                run_daily_pipeline()
+        else:
+            st.warning("No new posts scraped.")
+            
+        # Step 5: Updating Database
+        st.info("Updating Database...")
+        set_last_scrape_time(time.time())
+        time.sleep(0.5)
+        
+        # Step 6: Refreshing Dashboard
+        st.success("Refreshing Dashboard...")
+        time.sleep(1)
+        
+    st.cache_data.clear()
+    st.rerun()
+
+
 def main():
-    st.title("🚗 Snapgo Reddit Marketing Dashboard")
-    st.markdown("Identify transportation discussions, review geographic targets, and approve response suggestions.")
+    st.title("🚗 Snapgo Reddit Marketing Intelligence Dashboard")
+    st.markdown("Discover transportation discussions, classify user intent, and generate contextual reply drafts.")
 
     # Load configurations
     cfg = get_config()
     provider = cfg["ai"]["provider"]
-    db_path = cfg["database"]["path"]
-    insights_dir = cfg.get("paths", {}).get("batch_responses_dir", "data/batch_responses")
+    db_path = os.path.join(PROJECT_ROOT, cfg["database"]["path"])
+    insights_dir = os.path.join(PROJECT_ROOT, cfg.get("paths", {}).get("batch_responses_dir", "data/batch_responses"))
 
-    # Verify if database and directory paths exist
+    # Refresh Button at the top of the main area
+    if st.button("🔄 Refresh Reddit Posts", use_container_width=True):
+        run_scrape_workflow_with_progress()
+
+    # Verify if database exists
     if not os.path.exists(db_path):
-        st.error(f"SQLite Database not found at {db_path}. Please run populate_mock_data.py or scraper pipeline first.")
+        st.warning("SQLite Database not found. Please click 'Refresh Reddit Posts' to perform the initial scrape.")
         return
 
     if not os.path.exists(insights_dir):
@@ -300,24 +343,20 @@ def main():
     latest_insight_mtime = max((f.stat().st_mtime for f in insight_files), default=0.0)
     data_version = max(os.path.getmtime(db_path), latest_insight_mtime)
 
-    # Load records
-    with st.spinner("Retrieving records from database..."):
-        try:
-            df = load_posts_with_insights(db_path, insights_dir, provider, data_version)
-        except Exception as e:
-            st.error(f"Failed to query database: {str(e)}")
-            return
-
-    if df.empty:
-        st.warning("No processed transit leads found in the database.")
+    # Load records from SQLite (The Single Source of Truth)
+    try:
+        df = load_posts_with_insights(db_path, insights_dir, provider, data_version)
+    except Exception as e:
+        st.error(f"Failed to query database: {str(e)}")
         return
 
-    # Sidebar parameters
-    st.sidebar.header("🔧 Filters & Operators")
+    # Check if empty
+    if df.empty:
+        st.warning("No processed transit leads found in the database. Try clicking 'Refresh Reddit Posts' above.")
+        return
 
-    # Filter by Review Status
-    review_statuses = ["All", "Pending", "Approved", "Rejected"]
-    selected_status = st.sidebar.selectbox("Review Status", review_statuses, index=0)
+    # Sidebar parameters (Read-only view filters)
+    st.sidebar.header("🔧 Filters & Operators")
 
     # Filter by Marketing Campaign
     campaign_options = [
@@ -330,17 +369,14 @@ def main():
     priority_options = ["All", "Highest", "Medium", "Low", "Very Low"]
     selected_priority = st.sidebar.selectbox("Priority Level", priority_options, index=0)
 
-    # Geographic dynamic filters
+    # Geographic filters (Locked exactly to Snapgo India/Delhi NCR region)
     st.sidebar.subheader("🌍 Geography Filters")
     
-    countries = ["All"] + sorted([c for c in df['country'].unique() if c])
-    selected_country = st.sidebar.selectbox("Country", countries, index=0)
+    selected_country = st.sidebar.selectbox("Country", ["India"], index=0)
+    selected_state = st.sidebar.selectbox("State", ["Delhi NCR"], index=0)
 
-    states = ["All"] + sorted([s for s in df['state'].unique() if s])
-    selected_state = st.sidebar.selectbox("State", states, index=0)
-
-    cities = ["All"] + sorted([c for c in df['city'].unique() if c])
-    selected_city = st.sidebar.selectbox("City", cities, index=0)
+    allowed_cities = ["Delhi", "Noida", "Greater Noida", "Gurugram", "Ghaziabad", "Faridabad"]
+    selected_city = st.sidebar.selectbox("City", ["All"] + allowed_cities, index=0)
 
     # Metric range filters
     st.sidebar.subheader("Metrics Filters")
@@ -370,23 +406,21 @@ def main():
 
     # Apply filters
     filtered_df = df.copy()
-    if selected_status != "All":
-        filtered_df = filtered_df[filtered_df['review_status'] == selected_status.lower()]
+
+    # Enforce Geographic constraints
+    filtered_df = filtered_df[filtered_df['country'].str.lower() == 'india']
+    filtered_df = filtered_df[filtered_df['state'].str.lower() == 'delhi ncr']
+
+    if selected_city != "All":
+        filtered_df = filtered_df[filtered_df['city'] == selected_city]
+    else:
+        filtered_df = filtered_df[filtered_df['city'].isin(allowed_cities)]
 
     if selected_campaign != "All":
         filtered_df = filtered_df[filtered_df['marketing_campaign'] == selected_campaign]
 
     if selected_priority != "All":
         filtered_df = filtered_df[filtered_df['priority_level'] == selected_priority]
-
-    if selected_country != "All":
-        filtered_df = filtered_df[filtered_df['country'] == selected_country]
-
-    if selected_state != "All":
-        filtered_df = filtered_df[filtered_df['state'] == selected_state]
-
-    if selected_city != "All":
-        filtered_df = filtered_df[filtered_df['city'] == selected_city]
 
     # Apply metrics ranges filters
     filtered_df = filtered_df[
@@ -401,6 +435,60 @@ def main():
     # Apply sorting order
     ascending = (sort_order == 'Ascending')
     filtered_df = filtered_df.sort_values(by=sort_by, ascending=ascending)
+
+    # Statistics Grid (Live data metrics)
+    st.markdown("### 📈 Live Dashboard Statistics")
+    
+    # 2 rows of metrics cards
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col6, col7, col8, col9, col10 = st.columns(5)
+    
+    total_scraped = len(filtered_df)
+    
+    # New Posts Today
+    today_str = datetime.now(UTC).date().isoformat()
+    new_today = len(filtered_df[filtered_df['processed_at'] == today_str])
+    
+    # Average scores
+    avg_relevance = filtered_df['relevance_score'].mean() if not filtered_df.empty else 0.0
+    avg_frustration = filtered_df['emotion_score'].mean() if not filtered_df.empty else 0.0
+    
+    # Last refresh time
+    last_scrape_t = get_last_scrape_time()
+    if last_scrape_t > 0:
+        last_refresh_str = datetime.fromtimestamp(last_scrape_t, UTC).strftime('%Y-%m-%d %H:%M:%S UTC')
+    else:
+        last_refresh_str = "Never"
+        
+    # City counts (case-insensitive checks)
+    delhi_cnt = len(filtered_df[filtered_df['city'].str.lower() == 'delhi'])
+    noida_cnt = len(filtered_df[filtered_df['city'].str.lower().str.contains('noida', na=False)])
+    greater_noida_cnt = len(filtered_df[filtered_df['city'].str.lower().str.contains('greater noida', na=False)])
+    gurugram_cnt = len(filtered_df[filtered_df['city'].str.lower().str.contains('gurugram|gurgaon', na=False)])
+    ghaziabad_cnt = len(filtered_df[filtered_df['city'].str.lower().str.contains('ghaziabad', na=False)])
+    faridabad_cnt = len(filtered_df[filtered_df['city'].str.lower().str.contains('faridabad', na=False)])
+    
+    with col1:
+        st.markdown(f"<div class='metric-card'><h4>Total Scraped</h4><h2>{total_scraped}</h2></div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div class='metric-card'><h4>New Today</h4><h2>{new_today}</h2></div>", unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"<div class='metric-card'><h4>Avg Relevance</h4><h2>{avg_relevance:.2f}</h2></div>", unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"<div class='metric-card'><h4>Avg Frustration</h4><h2>{avg_frustration:.2f}</h2></div>", unsafe_allow_html=True)
+    with col5:
+        st.markdown(f"<div class='metric-card'><h4>Last Refresh</h4><h2 style='font-size: 13px; margin-top: 10px; color:#10b981;'>{last_refresh_str}</h2></div>", unsafe_allow_html=True)
+        
+    with col6:
+        st.markdown(f"<div class='metric-card'><h4>Delhi Posts</h4><h2>{delhi_cnt}</h2></div>", unsafe_allow_html=True)
+    with col7:
+        st.markdown(f"<div class='metric-card'><h4>Noida Posts</h4><h2>{noida_cnt}</h2></div>", unsafe_allow_html=True)
+    with col8:
+        st.markdown(f"<div class='metric-card'><h4>Greater Noida</h4><h2>{greater_noida_cnt}</h2></div>", unsafe_allow_html=True)
+    with col9:
+        st.markdown(f"<div class='metric-card'><h4>Gurugram Posts</h4><h2>{gurugram_cnt}</h2></div>", unsafe_allow_html=True)
+    with col10:
+        st.markdown(f"<div class='metric-card'><h4>Ghaziabad/Faridabad</h4><h2>{ghaziabad_cnt + faridabad_cnt}</h2></div>", unsafe_allow_html=True)
 
     # Display totals
     st.markdown(f"**Showing {len(filtered_df)} of {len(df)} posts matching current filters**")
@@ -420,14 +508,6 @@ def main():
     # Display post cards
     for idx, post in page_df.iterrows():
         display_post_card(post)
-
-    # Sidebar Summary Metrics panel
-    if len(filtered_df) > 0:
-        st.sidebar.subheader("📈 Campaign Summary Stats")
-        st.sidebar.metric("Total Matches", len(filtered_df))
-        st.sidebar.metric("Avg Priority Score", f"{filtered_df['overall_priority_score'].mean():.2f}")
-        st.sidebar.metric("Avg Relevance Score", f"{filtered_df['relevance_score'].mean():.2f}")
-        st.sidebar.metric("Avg Frustration Score", f"{filtered_df['emotion_score'].mean():.2f}")
 
 
 if __name__ == "__main__":

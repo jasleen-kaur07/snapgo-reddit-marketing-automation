@@ -87,3 +87,13 @@ def get_top_insights_from_today(limit=10) -> list:
     except sqlite3.Error as e:
         print(f"[SQLite get_top_insights_from_today Error] {e}")
         return []
+
+def get_existing_post(post_id: str, url: str) -> dict | None:
+    """Retrieve existing post details to check if content changed or if it was already processed."""
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT id, title, body, url, insight_processed FROM posts WHERE id = ? OR url = ?", (post_id, url)).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error as e:
+        print(f"[SQLite get_existing_post Error] {e}")
+        return None

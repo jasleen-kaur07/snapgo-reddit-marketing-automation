@@ -8,7 +8,7 @@ from datetime import datetime, UTC
 from playwright.async_api import async_playwright
 
 from config.config_loader import get_config
-from db.reader import is_already_processed
+from db.reader import is_already_processed, get_existing_post
 from db.writer import insert_post
 from utils.logger import setup_logger
 
@@ -165,6 +165,7 @@ async def scrape_queries_async() -> list:
                 trackers = soup.find_all("search-telemetry-tracker", attrs={"data-testid": "search-sdui-post"})
                 total_found = len(trackers)
                 
+                posts_to_process = []
                 for tracker in trackers:
                     try:
                         context_str = tracker.get("data-faceplate-tracking-context")
@@ -193,8 +194,8 @@ async def scrape_queries_async() -> list:
                         if not title or title.strip() in ("[deleted]", "[removed]"):
                             continue
                             
-                        # Filter duplicates
-                        if post_id in seen_ids or is_already_processed(post_id):
+                        # Filter duplicates in memory
+                        if post_id in seen_ids:
                             skipped_dup_count += 1
                             continue
                             
@@ -233,37 +234,71 @@ async def scrape_queries_async() -> list:
                             except Exception:
                                 pass
                                 
-                        # Fetch the body of the post by opening a new tab
-                        body = await fetch_post_body(context, url)
-                        
-                        # Filter deleted/removed body text
+                        posts_to_process.append({
+                            "id": post_id,
+                            "url": url,
+                            "title": title,
+                            "subreddit": subreddit,
+                            "created_utc": created_utc,
+                            "upvotes": upvotes,
+                            "comments": comments
+                        })
+                    except Exception as pe:
+                        log.debug(f"Error parsing post metadata element: {pe}")
+                
+                # Fetch all post bodies concurrently in parallel
+                if posts_to_process:
+                    tasks = [fetch_post_body(context, p["url"]) for p in posts_to_process]
+                    bodies = await asyncio.gather(*tasks)
+                    
+                    import sqlite3
+                    for p, body in zip(posts_to_process, bodies):
                         if body.strip() in ("[deleted]", "[removed]"):
                             continue
                             
-                        # Check location keywords in title and body
-                        has_loc = has_locations(title, body)
+                        # Query SQLite database for existing record
+                        existing_post = get_existing_post(p["id"], p["url"])
+                        if existing_post:
+                            content_changed = (existing_post["title"] != p["title"]) or (existing_post["body"] != body)
+                            is_processed = existing_post["insight_processed"] == 1
+                            
+                            if is_processed and not content_changed:
+                                # Content is identical and already processed. Skip AI processing.
+                                skipped_dup_count += 1
+                                continue
+                            
+                            # Content changed: reset AI processing status in SQLite
+                            if content_changed:
+                                try:
+                                    conn = sqlite3.connect(config["database"]["path"])
+                                    conn.execute("UPDATE posts SET insight_processed = 0 WHERE id = ?", (existing_post["id"],))
+                                    conn.commit()
+                                    conn.close()
+                                    log.info(f"Post {p['id']} content changed. Resetting AI processing status.")
+                                except Exception as dbe:
+                                    log.warning(f"Failed to reset insight_processed for post {p['id']}: {dbe}")
+                        
+                        # Prepare post dictionary for SQLite write
                         tags_list = ["transit"]
+                        has_loc = has_locations(p["title"], body)
                         if has_loc:
                             tags_list.append("has-location-keywords")
                             
                         post_dict = {
-                            "id": post_id,
-                            "url": url,
-                            "title": title,
+                            "id": p["id"],
+                            "url": p["url"],
+                            "title": p["title"],
                             "body": body,
-                            "subreddit": subreddit,
-                            "created_utc": created_utc,
+                            "subreddit": p["subreddit"],
+                            "created_utc": p["created_utc"],
                             "type": "post",
                             "tags": tags_list
                         }
                         
-                        # Store in SQLite database
+                        # Store in SQLite database (handles URL deduplication / upserts)
                         insert_post(post_dict, community_type="primary")
                         stored_posts.append(post_dict)
                         stored_count += 1
-                        
-                    except Exception as pe:
-                        log.debug(f"Error parsing post metadata element: {pe}")
                         
             except Exception as se:
                 log.warning(f"Error executing search query '{query}': {se}. Continuing with next query.")

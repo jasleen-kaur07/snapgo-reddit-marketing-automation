@@ -20,26 +20,59 @@ def _get_connection():
 def insert_post(post: dict, community_type: str = "primary"):
     conn = _get_connection()
     try:
-        conn.execute("""
-        INSERT OR IGNORE INTO posts (
-            id, url, title, body, subreddit, created_utc, last_active,
-            processed_at, community_type, type, post_body, parent_post_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            post["id"],
-            post["url"],
-            post["title"],
-            post.get("body", ""),
-            post["subreddit"],
-            post["created_utc"],
-            post["created_utc"],
-            datetime.now(UTC).date().isoformat(),
-            community_type,
-            post.get("type", "post"),
-            post.get("post_body", ""),
-            post.get("parent_post_id")
-        ))
-
+        # Check if URL already exists
+        cursor = conn.cursor()
+        existing = cursor.execute("SELECT id FROM posts WHERE url = ?", (post["url"],)).fetchone()
+        
+        if existing:
+            # Update the existing post content to keep it fresh
+            conn.execute("""
+            UPDATE posts SET
+                title = ?,
+                body = ?,
+                subreddit = ?,
+                created_utc = ?,
+                last_active = ?,
+                processed_at = ?,
+                community_type = ?,
+                type = ?,
+                post_body = ?,
+                parent_post_id = ?
+            WHERE id = ?
+            """, (
+                post["title"],
+                post.get("body", ""),
+                post["subreddit"],
+                post["created_utc"],
+                post["created_utc"],
+                datetime.now(UTC).date().isoformat(),
+                community_type,
+                post.get("type", "post"),
+                post.get("post_body", ""),
+                post.get("parent_post_id"),
+                existing[0]
+            ))
+        else:
+            # Insert new post
+            conn.execute("""
+            INSERT OR IGNORE INTO posts (
+                id, url, title, body, subreddit, created_utc, last_active,
+                processed_at, community_type, type, post_body, parent_post_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                post["id"],
+                post["url"],
+                post["title"],
+                post.get("body", ""),
+                post["subreddit"],
+                post["created_utc"],
+                post["created_utc"],
+                datetime.now(UTC).date().isoformat(),
+                community_type,
+                post.get("type", "post"),
+                post.get("post_body", ""),
+                post.get("parent_post_id")
+            ))
         conn.commit()
     except sqlite3.Error as e:
         print(f"[SQLite Insert Error] {e}")
@@ -137,20 +170,3 @@ def mark_insight_processed(post_id: str):
     except sqlite3.Error as e:
         print(f"[SQLite mark_insight_processed Error] {e}")
 
-def update_post_review_status(post_id: str, status: str, edited_response: str = None):
-    """Update the review status and optionally the edited suggested response of a post."""
-    conn = _get_connection()
-    try:
-        if edited_response is not None:
-            conn.execute("""
-            UPDATE posts SET review_status = ?, suggested_response = ?
-            WHERE id = ?
-            """, (status, edited_response, post_id))
-        else:
-            conn.execute("""
-            UPDATE posts SET review_status = ?
-            WHERE id = ?
-            """, (status, post_id))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"[SQLite update_post_review_status Error] {e}")
