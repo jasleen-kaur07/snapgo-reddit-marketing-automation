@@ -1,0 +1,97 @@
+# config/config.yaml
+
+# Target communities
+subreddits:
+  primary:
+    - delhi
+    - noida
+    - gurgaon
+    - gurugram
+    - india
+    - indiasocial
+    - bangalore
+    - mumbai
+    - hyderabad
+    - pune
+  exploratory_limit: 12             # Max exploratory subreddits at a time
+  exploratory_refresh_days: 7       # How often to refresh improvised list
+  exploratory_percentage: 20        # % of posts from exploratory communities (reduced for focused scrapers)
+  primary_percentage: 80            # % of posts from configured communities (increased to focus on target cities)
+
+# Reddit scraping settings
+locations:
+  primary:
+    - Delhi
+    - New Delhi
+    - Noida
+    - Greater Noida
+    - Gurugram
+    - Gurgaon
+    - Ghaziabad
+    - Faridabad
+  secondary:
+    - Bangalore
+    - Mumbai
+    - Hyderabad
+    - Pune
+
+scraper:
+  max_search_queries: 15            # Limits sequential browser search queries to keep runtime low
+  min_post_age_days: 0              # Include brand new discussions from today
+  max_post_age_days: 30             # Prioritize recent discussions (up to 30 days old)
+  max_items_per_day: 150            # Increased to cover multiple regional subreddits
+  include_comments: false
+  rate_limit_per_minute: 60         # Reddit API rate limit
+  keywords:                         # Keyword constraints to filter posts locally before LLM checks
+    - carpool
+    - commute
+    - ride sharing
+    - metro
+    - bus
+    - train
+    - fuel cost
+    - office travel
+    - student travel
+    - traffic
+    - parking
+
+# AI provider settings
+ai:
+  provider: openai               # "openai" or "anthropic"
+  openai:
+    model_filter: gpt-5-mini        # For pre-filtering stage
+    model_deep: gpt-5.1             # For insight extraction
+    enqueued_token_limits:           # Max enqueued tokens per model (OpenAI tier limits)
+      gpt-5.1: 900_000
+    default_enqueued_token_limit: 5_000_000
+  anthropic:
+    model_filter: claude-haiku-4-5-20251001
+    model_deep: claude-sonnet-4-5-20250929
+    default_enqueued_token_limit: 10_000_000
+  use_batch_api: true
+  monthly_budget_usd: 100           # Cost cap for safety
+  max_tokens_per_post: 1000         # Estimate for budgeting
+  cache_input: true                 # Reuse prompt if post is nearly identical
+
+# Scoring weights (used in filtering and final ranking)
+scoring:
+  relevance_weight: 0.40            # Transportation relevance weight
+  emotion_weight: 0.20              # Commuter pain/frustration weight
+  pain_point_weight: 0.20           # Pain point clarity weight
+  implementability_weight: 0.20     # Campaign alignment/outreach potential weight
+  technical_depth_weight: 0.0       # Replaced by marketing alignment, set weight to 0.0
+  recent_activity_weight: 0.0       # Disabled
+  min_technical_depth: 0            # Disable technical depth hard-filtering for marketing outreach
+  output_top_n: 10                  # Number of final posts to recommend
+
+# Database settings
+database:
+  path: data/db.sqlite
+  retention_days: 90                # Auto-remove posts older than this
+
+# Logging & output
+log_level: DEBUG                   # For debug & reuse
+save_batch_payloads: true           # For debug & reuse
+
+cleanup:
+  batch_response_retention_days: 3 # Cleanup batch responses older than this

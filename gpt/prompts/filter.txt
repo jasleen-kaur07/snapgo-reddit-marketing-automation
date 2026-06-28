@@ -1,0 +1,48 @@
+Given a Reddit post or comment, decide whether it contains a discussion about transportation, commuting, daily travel, or ride-sharing, and evaluate it for marketing outreach potential for Snapgo (a ride-sharing, carpooling, and smart transit platform).
+
+We target discussions related to:
+- Commuting, daily travel, office travel, hybrid work commutes.
+- College or student travel, hostel to campus transport.
+- Carpooling, ride-sharing, or looking for commute partners.
+- Fuel costs, petrol/diesel prices, saving travel expenses.
+- Traffic congestion, travel delays, parking frustrations.
+- Public transit (bus, train, metro) issues, route pricing, or multimodal travel.
+
+If this is a COMMENT, evaluate it in the context of the parent post. The comment may reference or elaborate on travel problems described in the post.
+
+Analyze:
+- Does the user talk about a real transit or commute challenge?
+- Are they complaining about traffic, fuel costs, or lack of transport options?
+- Is there a clear opportunity for Snapgo to suggest a better way to travel (carpool, discount, etc.)?
+
+Your output must include the following keys:
+- `relevance_score` (0-10): How relevant is this post to transportation, commuting, carpooling, or fuel costs?
+  - 0 = entirely unrelated to transport or travel
+  - 5 = discusses transport briefly (e.g., passing mention of a car)
+  - 8 = clear discussion about daily commutes, traffic, or transit options
+  - 10 = specific question or direct discussion about carpooling, ride-sharing, or commuting costs
+- `emotional_intensity` (0-10): Overall emotion or frustration level regarding their transit situation (Pain severity).
+- `pain_point_clarity` (0-10): How clearly they explain the specific travel problem (Intent clarity).
+- `implementability_score` (0-10): Campaign alignment. How well does this map to one of our target campaigns (Student Commute, Office Commute, Carpool, Fuel Savings, Traffic, Public Transport)?
+- `technical_depth_score` (0-10): Outreach viability. How likely is it that suggesting a solution will be helpful to this user? (Higher = better candidate for a helpful pitch).
+- `intent_strength` (0-10): How strong is the user's intent to switch transportation methods, find a ride-share/carpool, or actively resolve their transit problem?
+  - 0 = just general discussion or news with no intent
+  - 5 = venting about transport problems but not actively seeking an alternative
+  - 10 = direct request for carpools, ride-shares, or asking for alternative commute options
+- `pain_severity` (0-10): How severe is the transit pain described?
+  - 0 = minor inconvenience
+  - 5 = regular delay or moderate pricing frustration
+  - 10 = extreme financial strain, long daily delays (e.g. 3+ hours daily), or complete lack of transport options
+- `summary`: a 1-sentence summary of the transit pain point or request
+
+Respond with a JSON object in this format:
+{
+  "relevance_score": 8,
+  "emotional_intensity": 7,
+  "pain_point_clarity": 9,
+  "implementability_score": 8,
+  "technical_depth_score": 8,
+  "intent_strength": 9,
+  "pain_severity": 8,
+  "summary": "User is complaining about paying high Uber surge prices for their daily 15-mile office commute."
+}

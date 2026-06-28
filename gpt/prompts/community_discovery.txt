@@ -1,0 +1,28 @@
+Based on the following top-performing Reddit posts (titles and summaries), recommend a ranked list of 12 adjacent subreddits that are likely rich in conversations about commuting problems, traffic, ride-sharing requests, public transport complaints, or transport expenses.
+
+{SUMMARIES}
+
+We are looking for subreddits where:
+- Users frequently discuss daily travel, routes, and commuting experiences.
+- Users express frustration about transportation costs (fuel, Uber/Lyft prices, tolls).
+- Users discuss public transit schedules, delays, or carpooling options.
+- People ask for travel recommendations in specific regions or city subreddits.
+
+For each recommended subreddit, provide:
+- A short rationale explaining WHY this community has marketing outreach opportunities for a carpooling/transit app like Snapgo.
+- An estimate of:
+  - % of posts with travel pain point signals
+  - % of comments discussing commute choices
+  - Engagement level (low, medium, high)
+
+Respond exactly in this JSON format:
+[
+  {
+    "subreddit": "commuting",
+    "reason": "Users regularly share their long commute struggles, traffic frustration, and look for better travel workarounds.",
+    "pain_signal_pct": 80,
+    "solution_requests_pct": 40,
+    "engagement_level": "medium"
+  },
+  ...
+]
