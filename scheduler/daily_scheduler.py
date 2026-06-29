@@ -1,29 +1,38 @@
 # scheduler/daily_scheduler.py
 
 import time
+import os
+import sys
+from pathlib import Path
 from datetime import datetime
-from scheduler.schedulers.background import BackgroundScheduler
-from scheduler.triggers.cron import CronTrigger
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from scheduler.runner import run_daily_pipeline
 from utils.logger import setup_logger
 
 log = setup_logger()
 
 def start_scheduler():
-    """Start the background scheduler to run the pipeline daily."""
+    """Start the background scheduler to run the pipeline hourly."""
     scheduler = BackgroundScheduler()
 
-    # Run daily at 8:00 AM UTC
+    # Run hourly at minute 0 (every hour)
     scheduler.add_job(
         run_daily_pipeline,
-        trigger=CronTrigger(hour=8, minute=0),
-        id="daily_reddit_pipeline",
-        name="Daily Reddit Scraping Pipeline",
+        trigger=CronTrigger(hour="*", minute=0),
+        id="hourly_reddit_pipeline",
+        name="Hourly Reddit Scraping Pipeline",
         replace_existing=True
     )
 
     scheduler.start()
-    log.info("Scheduler started. Pipeline will run daily at 08:00 UTC.")
+    log.info("Scheduler started. Pipeline will run hourly.")
 
     try:
         # Keep the main thread alive

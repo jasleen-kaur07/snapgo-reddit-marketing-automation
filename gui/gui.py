@@ -8,7 +8,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import datetime, UTC
+from datetime import datetime, timezone, timedelta
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 # Ensure project root is importable when running via `streamlit run gui/gui.py`.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -275,47 +276,6 @@ def display_post_card(post: pd.Series):
             st.write(body_text)
 
 
-def run_scrape_workflow_with_progress():
-    """Executes the scraper workflow step-by-step showing status in real-time."""
-    status_placeholder = st.empty()
-    with status_placeholder.container():
-        st.markdown("### 🔄 Refreshing Reddit Feed")
-        
-        # Step 1 & 2: Search & Extract (Playwright Scraper)
-        st.info("Searching Reddit...")
-        time.sleep(0.5)
-        st.info("Extracting Posts...")
-        from reddit.scraper import scrape_subreddits
-        scraped_posts = scrape_subreddits()
-        
-        # Step 3: Filtering
-        st.info("Filtering...")
-        from scheduler.runner import is_valid_post, run_local_fallback_pipeline, is_ai_configured
-        scraped_posts = [p for p in scraped_posts if is_valid_post(p)]
-        
-        # Step 4: Generating AI Insights (Only for newly scraped/changed posts)
-        st.info("Generating AI Insights...")
-        if scraped_posts:
-            if not is_ai_configured():
-                run_local_fallback_pipeline(scraped_posts)
-            else:
-                run_daily_pipeline()
-        else:
-            st.warning("No new posts scraped.")
-            
-        # Step 5: Updating Database
-        st.info("Updating Database...")
-        set_last_scrape_time(time.time())
-        time.sleep(0.5)
-        
-        # Step 6: Refreshing Dashboard
-        st.success("Refreshing Dashboard...")
-        time.sleep(1)
-        
-    st.cache_data.clear()
-    st.rerun()
-
-
 def main():
     st.title("🚗 Snapgo Reddit Marketing Intelligence Dashboard")
     st.markdown("Discover transportation discussions, classify user intent, and generate contextual reply drafts.")
@@ -328,7 +288,10 @@ def main():
 
     # Refresh Button at the top of the main area
     if st.button("🔄 Refresh Reddit Posts", use_container_width=True):
-        run_scrape_workflow_with_progress()
+        st.cache_data.clear()
+        st.toast("Updated feed with the latest scraping data from the database!", icon="🔄")
+        time.sleep(0.5)
+        st.rerun()
 
     # Verify if database exists
     if not os.path.exists(db_path):
@@ -446,7 +409,7 @@ def main():
     total_scraped = len(filtered_df)
     
     # New Posts Today
-    today_str = datetime.now(UTC).date().isoformat()
+    today_str = datetime.now(IST).date().isoformat()
     new_today = len(filtered_df[filtered_df['processed_at'] == today_str])
     
     # Average scores
@@ -456,7 +419,7 @@ def main():
     # Last refresh time
     last_scrape_t = get_last_scrape_time()
     if last_scrape_t > 0:
-        last_refresh_str = datetime.fromtimestamp(last_scrape_t, UTC).strftime('%Y-%m-%d %H:%M:%S UTC')
+        last_refresh_str = datetime.fromtimestamp(last_scrape_t, IST).strftime('%Y-%m-%d %H:%M:%S IST')
     else:
         last_refresh_str = "Never"
         
