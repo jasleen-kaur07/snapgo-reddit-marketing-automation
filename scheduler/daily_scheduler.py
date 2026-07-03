@@ -22,12 +22,12 @@ def start_scheduler():
     """Start the background scheduler to run the pipeline hourly."""
     scheduler = BackgroundScheduler()
 
-    # Run hourly at minute 0 (every hour)
+    # Run every 30 minutes
     scheduler.add_job(
         run_daily_pipeline,
-        trigger=CronTrigger(hour="*", minute=0),
+        trigger=CronTrigger(minute="*/30"),
         id="hourly_reddit_pipeline",
-        name="Hourly Reddit Scraping Pipeline",
+        name="30-Minute Reddit Scraping Pipeline",
         replace_existing=True
     )
 
@@ -43,6 +43,27 @@ def start_scheduler():
         scheduler.shutdown()
         log.info("Scheduler shutdown.")
 
+def check_and_write_pid():
+    pid_file = os.path.join(PROJECT_ROOT, "data", "scheduler.pid")
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+    
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            # Check if this PID is running
+            os.kill(pid, 0)
+            log.warning(f"Scheduler is already running with PID {pid}. Exiting.")
+            sys.exit(0)
+        except (ValueError, OSError):
+            # PID not running or invalid file, overwrite it
+            pass
+            
+    # Write current PID
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
+
 if __name__ == "__main__":
+    check_and_write_pid()
     log.info("Starting scheduler for Reddit scraping pipeline...")
     start_scheduler()

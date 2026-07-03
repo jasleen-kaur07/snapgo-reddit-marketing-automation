@@ -6,6 +6,9 @@ import os
 import glob
 from datetime import datetime
 import time
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 from reddit.scraper import scrape_subreddits
 from db.writer import insert_post, update_post_filter_scores, update_post_insight, mark_insight_processed, mark_posts_in_history
 from db.reader import get_top_insights_from_today, get_posts_by_ids, get_post_parent_mapping
@@ -686,132 +689,143 @@ def run_local_fallback_pipeline(posts: list[dict]):
     log.info(f"Successfully processed {len(posts)} posts locally and stored in database.")
 
 def run_daily_pipeline():
-    log.info("\U0001F680 Starting Reddit scraping and analysis pipeline")
+    log.info("🚀 Starting Reddit scraping and analysis pipeline")
 
-    ensure_directory_exists("data/deferred")
-    ensure_directory_exists("data")
-    ensure_directory_exists("data/batch_responses")
-    clean_old_batch_files()
-    clean_storage()
-    create_tables()
-    initialize_cost_tracking()
-
-    log.info("Step 1: Cleaning old database entries...")
-    clean_old_entries()
-
-    log.info("Step 2: Scraping Reddit posts...")
-    scraped_posts = scrape_subreddits()
-    if not scraped_posts:
-        log.warning("No posts found to analyze. Exiting pipeline.")
-        return
-
-    log.info(f"Found {len(scraped_posts)} posts before filtering invalid entries...")
-    scraped_posts = [p for p in scraped_posts if is_valid_post(p)]
-    log.info(f"{len(scraped_posts)} posts remain after sanitization/validation.")
-
-    if not scraped_posts:
-        log.warning("No valid posts after sanitization. Exiting pipeline.")
-        return
-
-    if not is_ai_configured():
-        log.warning("⚠️ OpenAI/Anthropic API key is not configured in .env file.")
-        log.info("Running local fallback processing pipeline...")
-        run_local_fallback_pipeline(scraped_posts)
-        log.info("✅ Pipeline completed successfully via local fallback.")
-        return
-
-    log.info("Step 3: Preparing posts for filtering...")
-    filter_batch = prepare_filter_batch(scraped_posts)
-    filter_cost = estimate_filter_cost(scraped_posts)
-    log.info(f"Estimated cost for filtering: ${filter_cost:.2f}")
-
-    if not can_process_batch(filter_cost):
-        log.error("Insufficient budget for filtering. Exiting pipeline.")
-        return
-
-    model_filter = config["ai"][config["ai"]["provider"]]["model_filter"]
-    filter_batches = split_batch_by_token_limit(filter_batch, model_filter)
-
-    filter_result_paths = submit_batches_parallel(filter_batches, model_filter, generate_batch_payload, "filter")
-
-    log.info("Step 4: Selecting high-potential posts from filter results...")
-    high_potential_ids, all_filtered_ids = get_high_potential_ids_from_filter_results(filter_result_paths)
-
-    # Mark posts that were filtered but NOT high-potential into history
-    # (they're fully done — scored but below threshold, no further processing needed)
-    below_threshold_ids = all_filtered_ids - high_potential_ids
-    if below_threshold_ids:
-        mark_posts_in_history(list(below_threshold_ids))
-        log.info(f"Marked {len(below_threshold_ids)} below-threshold posts in history.")
-
-    if not high_potential_ids:
-        log.info("No high-value posts found. Exiting pipeline.")
-        return
-
-    deep_posts = get_posts_by_ids(high_potential_ids, require_unprocessed=True)
-    if not deep_posts:
-        log.info("No new posts left for deep insight. Exiting pipeline.")
-        return
-
-    insight_batch = prepare_insight_batch(deep_posts)
-    insight_cost = estimate_insight_cost(insight_batch)
-    log.info(f"Estimated cost for insight analysis: ${insight_cost:.2f}")
-
-    if not can_process_batch(insight_cost):
-        log.error("Insufficient budget for insight analysis. Exiting pipeline.")
-        return
-
-    log.info(f"Submitting batch of {len(insight_batch)} posts for deep analysis...")
-    log.info(f"Preparing {len(insight_batch)} posts for deep insight...")
-    model_deep = config["ai"][config["ai"]["provider"]]["model_deep"]
-    insight_batches = split_batch_by_token_limit(insight_batch, model_deep)
-    all_insight_paths = submit_batches_parallel(
-        insight_batches, model_deep, generate_batch_payload, "insight"
-    )
-
-    log.info("Step 5: Updating posts with deep insights...")
-    insight_completed_ids = []
     try:
-        for insight_path in all_insight_paths:
-            with open(insight_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    result = json.loads(line)
-                    post_id, content = extract_content_from_result(result)
-                    try:
-                        insight = json.loads(content)
-                        
-                        # Retrieve post and filter scores to calculate priority
-                        post_records = get_posts_by_ids({post_id})
-                        if post_records:
-                            post_rec = post_records[0]
-                            rel = post_rec.get("relevance_score") or 5.0
-                            intent = post_rec.get("intent_strength") or 5.0
-                            pain = post_rec.get("pain_severity") or 5.0
+        ensure_directory_exists("data/deferred")
+        ensure_directory_exists("data")
+        ensure_directory_exists("data/batch_responses")
+        clean_old_batch_files()
+        clean_storage()
+        create_tables()
+        initialize_cost_tracking()
+
+        log.info("Step 1: Cleaning old database entries...")
+        clean_old_entries()
+
+        log.info("Step 2: Scraping Reddit posts...")
+        scraped_posts = scrape_subreddits()
+        if not scraped_posts:
+            log.warning("No posts found to analyze. Exiting pipeline.")
+            return
+
+        log.info(f"Found {len(scraped_posts)} posts before filtering invalid entries...")
+        scraped_posts = [p for p in scraped_posts if is_valid_post(p)]
+        log.info(f"{len(scraped_posts)} posts remain after sanitization/validation.")
+
+        if not scraped_posts:
+            log.warning("No valid posts after sanitization. Exiting pipeline.")
+            return
+
+        if not is_ai_configured():
+            log.warning("⚠️ OpenAI/Anthropic API key is not configured in .env file.")
+            log.info("Running local fallback processing pipeline...")
+            run_local_fallback_pipeline(scraped_posts)
+            log.info("✅ Pipeline completed successfully via local fallback.")
+            return
+
+        log.info("Step 3: Preparing posts for filtering...")
+        filter_batch = prepare_filter_batch(scraped_posts)
+        filter_cost = estimate_filter_cost(scraped_posts)
+        log.info(f"Estimated cost for filtering: ${filter_cost:.2f}")
+
+        if not can_process_batch(filter_cost):
+            log.error("Insufficient budget for filtering. Exiting pipeline.")
+            return
+
+        model_filter = config["ai"][config["ai"]["provider"]]["model_filter"]
+        filter_batches = split_batch_by_token_limit(filter_batch, model_filter)
+
+        filter_result_paths = submit_batches_parallel(filter_batches, model_filter, generate_batch_payload, "filter")
+
+        log.info("Step 4: Selecting high-potential posts from filter results...")
+        high_potential_ids, all_filtered_ids = get_high_potential_ids_from_filter_results(filter_result_paths)
+
+        # Mark posts that were filtered but NOT high-potential into history
+        # (they're fully done — scored but below threshold, no further processing needed)
+        below_threshold_ids = all_filtered_ids - high_potential_ids
+        if below_threshold_ids:
+            mark_posts_in_history(list(below_threshold_ids))
+            log.info(f"Marked {len(below_threshold_ids)} below-threshold posts in history.")
+
+        if not high_potential_ids:
+            log.info("No high-value posts found. Exiting pipeline.")
+            return
+
+        deep_posts = get_posts_by_ids(high_potential_ids, require_unprocessed=True)
+        if not deep_posts:
+            log.info("No new posts left for deep insight. Exiting pipeline.")
+            return
+
+        insight_batch = prepare_insight_batch(deep_posts)
+        insight_cost = estimate_insight_cost(insight_batch)
+        log.info(f"Estimated cost for insight analysis: ${insight_cost:.2f}")
+
+        if not can_process_batch(insight_cost):
+            log.error("Insufficient budget for insight analysis. Exiting pipeline.")
+            return
+
+        log.info(f"Submitting batch of {len(insight_batch)} posts for deep analysis...")
+        log.info(f"Preparing {len(insight_batch)} posts for deep insight...")
+        model_deep = config["ai"][config["ai"]["provider"]]["model_deep"]
+        insight_batches = split_batch_by_token_limit(insight_batch, model_deep)
+        all_insight_paths = submit_batches_parallel(
+            insight_batches, model_deep, generate_batch_payload, "insight"
+        )
+
+        log.info("Step 5: Updating posts with deep insights...")
+        insight_completed_ids = []
+        try:
+            for insight_path in all_insight_paths:
+                with open(insight_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        result = json.loads(line)
+                        post_id, content = extract_content_from_result(result)
+                        try:
+                            insight = json.loads(content)
                             
-                            score, level = calculate_priority_score(post_rec, rel, intent, pain, insight)
-                            insight["overall_priority_score"] = score
-                            insight["priority_level"] = level
-                            insight["roi_weight"] = int(score / 10)
-                        
-                        update_post_insight(post_id, insight)
-                        mark_insight_processed(post_id)
-                        insight_completed_ids.append(post_id)
-                    except Exception as e:
-                        log.error(f"Error parsing insight for post {post_id}: {str(e)}")
-    except Exception as e:
-        log.error(f"Error reading insight results: {str(e)}")
+                            # Retrieve post and filter scores to calculate priority
+                            post_records = get_posts_by_ids({post_id})
+                            if post_records:
+                                post_rec = post_records[0]
+                                rel = post_rec.get("relevance_score") or 5.0
+                                intent = post_rec.get("intent_strength") or 5.0
+                                pain = post_rec.get("pain_severity") or 5.0
+                                
+                                score, level = calculate_priority_score(post_rec, rel, intent, pain, insight)
+                                insight["overall_priority_score"] = score
+                                insight["priority_level"] = level
+                                insight["roi_weight"] = int(score / 10)
+                            
+                            update_post_insight(post_id, insight)
+                            mark_insight_processed(post_id)
+                            insight_completed_ids.append(post_id)
+                        except Exception as e:
+                            log.error(f"Error parsing insight for post {post_id}: {str(e)}")
+        except Exception as e:
+            log.error(f"Error reading insight results: {str(e)}")
 
-    # Mark posts that completed insight analysis into history
-    if insight_completed_ids:
-        mark_posts_in_history(insight_completed_ids)
-        log.info(f"Marked {len(insight_completed_ids)} insight-completed posts in history.")
+        # Mark posts that completed insight analysis into history
+        if insight_completed_ids:
+            mark_posts_in_history(insight_completed_ids)
+            log.info(f"Marked {len(insight_completed_ids)} insight-completed posts in history.")
 
-    output_limit = config["scoring"].get("output_top_n", 10)
-    top_posts = get_top_insights_from_today(limit=output_limit)
-    log.info(f"✅ Pipeline finished. Found {len(top_posts)} qualified leads.")
+        output_limit = config["scoring"].get("output_top_n", 10)
+        top_posts = get_top_insights_from_today(limit=output_limit)
+        log.info(f"✅ Pipeline finished. Found {len(top_posts)} qualified leads.")
 
-    for i, post in enumerate(top_posts[:5], 1):
-        log.info(f"{i}. [{post['subreddit']}] {post['title']} — Priority Score: {post.get('overall_priority_score', 0)} | Level: {post.get('priority_level', 'Low')} - {post['url']}")
+        for i, post in enumerate(top_posts[:5], 1):
+            log.info(f"{i}. [{post['subreddit']}] {post['title']} — Priority Score: {post.get('overall_priority_score', 0)} | Level: {post.get('priority_level', 'Low')} - {post['url']}")
+    finally:
+        # Write current epoch timestamp to data/last_scrape.txt
+        try:
+            timestamp_file = os.path.join(PROJECT_ROOT, "data", "last_scrape.txt")
+            os.makedirs(os.path.dirname(timestamp_file), exist_ok=True)
+            with open(timestamp_file, "w") as f:
+                f.write(str(time.time()))
+            log.info("Updated last scrape timestamp file data/last_scrape.txt")
+        except Exception as e:
+            log.error(f"Failed to update last scrape timestamp file: {e}")
 
 
 def calculate_priority_score(post: dict, relevance: float, intent_strength: float, pain_severity: float, insight_geo: dict) -> tuple[float, str]:

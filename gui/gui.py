@@ -22,7 +22,7 @@ from scheduler.runner import run_daily_pipeline
 # Configure Streamlit page
 st.set_page_config(
     page_title="Snapgo Reddit Marketing Intelligence Dashboard",
-    page_icon="🚗",
+    page_icon="📈",
     layout="wide"
 )
 
@@ -276,8 +276,41 @@ def display_post_card(post: pd.Series):
             st.write(body_text)
 
 
+def check_and_start_background_scheduler():
+    """Ensure the hourly background scheduler is running by launching it from the user's session if not active."""
+    pid_file = os.path.join(PROJECT_ROOT, "data", "scheduler.pid")
+    is_running = False
+    
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            # Check if this PID is running
+            os.kill(pid, 0)
+            is_running = True
+        except (ValueError, OSError):
+            pass
+            
+    if not is_running:
+        import subprocess
+        python_bin = os.path.join(PROJECT_ROOT, ".venv", "bin", "python")
+        if not os.path.exists(python_bin):
+            python_bin = "python"
+            
+        scheduler_script = os.path.join(PROJECT_ROOT, "scheduler", "daily_scheduler.py")
+        try:
+            subprocess.Popen(
+                [python_bin, scheduler_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+        except Exception:
+            pass
+
 def main():
-    st.title("🚗 Snapgo Reddit Marketing Intelligence Dashboard")
+    check_and_start_background_scheduler()
+    st.title("Snapgo Reddit Marketing Intelligence Dashboard")
     st.markdown("Discover transportation discussions, classify user intent, and generate contextual reply drafts.")
 
     # Load configurations
@@ -289,7 +322,7 @@ def main():
     # Refresh Button at the top of the main area
     if st.button("🔄 Refresh Reddit Posts", use_container_width=True):
         st.cache_data.clear()
-        st.toast("Updated feed with the latest scraping data from the database!", icon="🔄")
+        st.toast("Updated feed with the latest background scraped data from SQLite!", icon="🔄")
         time.sleep(0.5)
         st.rerun()
 
